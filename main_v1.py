@@ -11,9 +11,6 @@ from future.utils import viewitems, lrange
 from sklearn.metrics import precision_recall_curve
 
 
-# In[2]:
-
-
 def read_h5file(path):
     hf = h5py.File(path, 'r')
     g1 = hf.get('images')
@@ -47,10 +44,11 @@ def load_features(dataset_dir, is_gv=True):
                 vid2features[vid] = cur_arr
             else:
                 cur_arr = g1.get(vid)
+                cur_arr_mean = np.mean(cur_arr, axis=0, keepdims=True)
                 #print("1:",cur_arr.shape)
                 #cur_arr = np.concatenate([cur_arr, np.mean(cur_arr, axis=0, keepdims=True)], axis=0)
                 cur_arr = np.asarray(cur_arr)
-                cur_arr_mean = np.mean(cur_arr, axis=0, keepdims=True)
+                #cur_arr = cur_arr[:,:256]
                 vfeat[vid] = cur_arr_mean
                 vid2features[vid] = cur_arr
                 #print(cur_arr.shape)
@@ -117,7 +115,7 @@ def calculate_similarities_dp(query_features, all_features):
 
     return np.max(f[-1,:])
 
-def calculate_similarities(query_features, all_features):
+def calculate_similarities(query_features, all_features, w):
     """
       用于计算两组特征(已经做过l2-norm)之间的相似度
       Args:
@@ -130,16 +128,10 @@ def calculate_similarities(query_features, all_features):
     # 计算待查询视频和所有视频的距离
     dist = np.nan_to_num(cdist(query_features, all_features, metric='cosine'))
     sim_list = []
-    for i, v in enumerate(query_features):
-        # 归一化，将距离转化成相似度
-        # sim = np.round(1 - dist[i] / dist[i].max(), decimals=6)
-        sim = 1-dist[i]
-        # 按照相似度的从大到小排列，输出index
-        similarities += np.max(sim)
-        #sim_list.append(1 + np.max(sim))
-    
-    #similarities /= len(query_features)
-    #return max(sim_list)
+
+    sim = 1 - dist
+    sim = np.max(sim, axis=1)
+    similarities = np.sum(sim * w)
     return similarities
 
 def evaluateOfficial(annotations, results, relevant_labels, dataset, quiet):
@@ -196,6 +188,14 @@ def evaluateOfficial(annotations, results, relevant_labels, dataset, quiet):
         pr.append(p)
     # return mAP
     return mAP, np.mean(pr, axis=0)[::-1]
+
+def self_sim_matrix(feat):
+    dist = np.nan_to_num(cdist(feat, feat, metric='cosine'))
+    sim = 1 - dist
+    sim = np.sum(sim, axis=1, keepdims=False)
+    print(sim)
+    return sim
+
 
 class GTOBJ:
     def __init__(self):
@@ -270,17 +270,21 @@ for task_name in ['DSVR', 'CSVR', 'ISVR']:
         results = dict()
         for _,id in enumerate(tqdm(query_indexs)):
             sim_q = sim_matrix[_]
-            topk = 2000
+            topk = 10000
             
             gallery_idx = [x[0] for x in sim_q[:topk]]
 
-            print("video id:" + str(_))
+            #print("video id:" + str(_))
             similarities = dict()
             query_features = global_feattures[id]
+           
+            self_attention_w = np.ones(query_features.shape[0])
+            self_attention_w = self_sim_matrix(query_features)
+
             for idx in gallery_idx:
                 temp_feature = global_feattures[idx]
                 __ = idx
-                now_similarities = calculate_similarities(query_features, temp_feature)
+                now_similarities = calculate_similarities(query_features, temp_feature, self_attention_w)
                 similarities[names[__]] = now_similarities
             
             query_result = dict(map(lambda v: (names[v[0]], v[1]), sim_q[topk:]))
